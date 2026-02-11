@@ -1,0 +1,4 @@
+/* Tailwind will handle styling via CDN in HTML */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
