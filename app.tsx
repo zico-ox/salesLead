@@ -13,7 +13,7 @@ import {
   Filter,
   Trash,
   Pencil,
-  Settings
+  GitBranch
 } from 'lucide-react';
 import { loadSalesFromFirebase, addSaleToFirebase, updateSaleInFirebase, deleteSaleFromFirebase, saveSubjectsToFirebase, loadSubjectsFromFirebase } from './firebase.config';
 
@@ -47,14 +47,7 @@ const SalesTracker = () => {
   const [newSubjectPrice, setNewSubjectPrice] = useState('');
 
   // Subject List with prices (now in state)
-  const [subjects, setSubjects] = useState<Record<string, { price: number }>>({
-    'ACC': { price: 30.00 },
-    'BSS': { price: 30.00 },
-    'ECO': { price: 30.00 },
-    'ENG': { price: 30.00 },
-    'ARB': { price: 30.00 },
-    'CMP': { price: 30.00 }
-  });
+  const [subjects, setSubjects] = useState<Record<string, { price1: number; price2: number }>>({});
 
   // Form State
   // selectedSubjects holds objects so user can pick subjects under +1 and +2 simultaneously
@@ -87,7 +80,15 @@ const SalesTracker = () => {
         }
 
         if (firebaseSubjects) {
-          setSubjects(firebaseSubjects);
+          // Normalize data to ensure price1 and price2 exist
+          const normalizedSubjects: Record<string, { price1: number; price2: number }> = {};
+          Object.entries(firebaseSubjects).forEach(([key, val]: [string, any]) => {
+            normalizedSubjects[key] = {
+              price1: val.price1 !== undefined ? val.price1 : (val.price || 30),
+              price2: val.price2 !== undefined ? val.price2 : (val.price || 30)
+            };
+          });
+          setSubjects(normalizedSubjects);
         }
         setSyncStatus('synced');
       } catch (error) {
@@ -207,9 +208,10 @@ const SalesTracker = () => {
   const handleAddSubject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newSubjectCode && newSubjectPrice) {
+      const price = parseFloat(newSubjectPrice);
       const updatedSubjects = {
         ...subjects,
-        [newSubjectCode.toUpperCase()]: { price: parseFloat(newSubjectPrice) }
+        [newSubjectCode.toUpperCase()]: { price1: price, price2: price }
       };
       setSubjects(updatedSubjects);
       setNewSubjectCode('');
@@ -218,13 +220,42 @@ const SalesTracker = () => {
     }
   };
 
-  const handleUpdateSubjectPrice = async (code: string, newPrice: number) => {
+  const handleUpdateSubjectPrice = async (code: string, category: '+1' | '+2', newPrice: number) => {
+    const subject = subjects[code];
     const updatedSubjects = {
       ...subjects,
-      [code]: { price: newPrice }
+      [code]: { 
+        ...subject,
+        [category === '+1' ? 'price1' : 'price2']: newPrice 
+      }
     };
     setSubjects(updatedSubjects);
-    await saveSubjectsToFirebase(updatedSubjects);
+
+    // Update existing sales
+    const updatedSales = sales.map(sale => {
+      if (sale.subjects && sale.subjects.some(s => s.split(' ')[1] === code)) {
+        const newAmount = sale.subjects.reduce((acc, s) => {
+          const parts = s.split(' ');
+          const cat = parts[0] as '+1' | '+2';
+          const subCode = parts[1];
+          const subData = updatedSubjects[subCode];
+          const price = (cat === '+1' ? subData?.price1 : subData?.price2) || 0;
+          return acc + price;
+        }, 0);
+        return { ...sale, amount: newAmount };
+      }
+      return sale;
+    });
+
+    const changedSales = updatedSales.filter((s, i) => s.amount !== sales[i].amount);
+    const promises: Promise<any>[] = [saveSubjectsToFirebase(updatedSubjects)];
+
+    if (changedSales.length > 0) {
+      setSales(updatedSales);
+      changedSales.forEach(s => promises.push(updateSaleInFirebase(s.id, { amount: s.amount })));
+    }
+
+    await Promise.all(promises);
   };
 
   const handleDeleteSubject = async (code: string) => {
@@ -355,7 +386,7 @@ const SalesTracker = () => {
             className="p-3 bg-purple-100 hover:bg-purple-200 text-purple-700 rounded-lg shadow-lg transform hover:scale-105 transition-all"
             title="Manage Subjects"
           >
-            <Settings size={22} />
+            <GitBranch size={22} />
           </button>
           <button 
             onClick={() => setIsModalOpen(true)}
@@ -673,14 +704,15 @@ const SalesTracker = () => {
                                   next = next.filter(s => !(s.category === '+1' && s.code === subject));
                                 }
                                 setSelectedSubjects(next);
-                                // recalc amount (no quantity field)
-                                const amountSum = next.reduce((acc, it) => acc + (subjects[it.code]?.price || 0), 0);
+                                const amountSum = next.reduce((acc, it) => {
+                                  return acc + (it.category === '+1' ? (subjects[it.code]?.price1 || 0) : (subjects[it.code]?.price2 || 0));
+                                }, 0);
                                 setFormData({ ...formData, amount: amountSum });
                               }}
                               className="w-5 h-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                             />
                             <span className="text-sm font-bold text-gray-800">{subject}</span>
-                            <span className="text-xs text-gray-500 ml-auto">₹{subjects[subject].price.toFixed(2)}</span>
+                            <span className="text-xs text-gray-500 ml-auto">₹{subjects[subject].price1.toFixed(2)}</span>
                           </label>
                         );
                       })}
@@ -706,13 +738,15 @@ const SalesTracker = () => {
                                   next = next.filter(s => !(s.category === '+2' && s.code === subject));
                                 }
                                 setSelectedSubjects(next);
-                                const amountSum = next.reduce((acc, it) => acc + (subjects[it.code]?.price || 0), 0);
+                                const amountSum = next.reduce((acc, it) => {
+                                  return acc + (it.category === '+1' ? (subjects[it.code]?.price1 || 0) : (subjects[it.code]?.price2 || 0));
+                                }, 0);
                                 setFormData({ ...formData, amount: amountSum });
                               }}
                               className="w-5 h-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                             />
                             <span className="text-sm font-bold text-gray-800">{subject}</span>
-                            <span className="text-xs text-gray-500 ml-auto">₹{subjects[subject].price.toFixed(2)}</span>
+                            <span className="text-xs text-gray-500 ml-auto">₹{subjects[subject].price2.toFixed(2)}</span>
                           </label>
                         );
                       })}
@@ -833,7 +867,7 @@ const SalesTracker = () => {
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden border border-gray-200 max-h-[80vh] flex flex-col">
             <div className="p-6 border-b border-gray-200 bg-gray-50 flex justify-between items-center shrink-0">
               <div className="flex items-center gap-3">
-                <BookOpen size={24} className="text-purple-600" />
+                <GitBranch size={24} className="text-purple-600" />
                 <h3 className="font-bold text-xl text-gray-900">Manage Subjects</h3>
               </div>
               <button onClick={() => setIsSubjectModalOpen(false)} className="text-gray-400 hover:text-gray-600 p-1 hover:bg-gray-200 rounded-lg">
@@ -879,20 +913,33 @@ const SalesTracker = () => {
                 <h4 className="font-bold text-gray-700 text-sm border-b pb-2">Existing Subjects</h4>
                 {Object.entries(subjects).map(([code, data]) => (
                   <div key={code} className="flex items-center justify-between bg-gray-50 p-3 rounded-lg border border-gray-100">
-                    <span className="font-bold text-gray-800">{code}</span>
-                    <div className="flex items-center gap-3">
+                    <span className="font-bold text-gray-800 w-16">{code}</span>
+                    <div className="flex items-center gap-4 flex-1 justify-end">
+                      
                       <div className="flex items-center gap-1">
+                        <span className="text-xs font-bold text-gray-500">+1</span>
                         <span className="text-gray-500 text-sm">₹</span>
                         <input 
                           type="number" 
                           className="w-16 border border-gray-300 rounded px-2 py-1 text-sm text-right"
-                          value={data.price}
-                          onChange={(e) => handleUpdateSubjectPrice(code, parseFloat(e.target.value))}
+                          value={data.price1}
+                          onChange={(e) => handleUpdateSubjectPrice(code, '+1', parseFloat(e.target.value))}
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-1">
+                        <span className="text-xs font-bold text-gray-500">+2</span>
+                        <span className="text-gray-500 text-sm">₹</span>
+                        <input 
+                          type="number" 
+                          className="w-16 border border-gray-300 rounded px-2 py-1 text-sm text-right"
+                          value={data.price2}
+                          onChange={(e) => handleUpdateSubjectPrice(code, '+2', parseFloat(e.target.value))}
                         />
                       </div>
                       <button 
                         onClick={() => handleDeleteSubject(code)}
-                        className="text-red-400 hover:text-red-600 p-1"
+                        className="text-red-400 hover:text-red-600 p-1 ml-2"
                       >
                         <X size={16} />
                       </button>
