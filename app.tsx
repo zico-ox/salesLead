@@ -4,18 +4,18 @@ import {
   Search, 
   FileText,
   X,
-  TrendingUp,
   User,
   BookOpen,
-  Layers,
   CreditCard,
   Truck,
   Filter,
   Trash,
   Pencil,
-  GitBranch
+  LayoutDashboard
 } from 'lucide-react';
-import { loadSalesFromFirebase, addSaleToFirebase, updateSaleInFirebase, deleteSaleFromFirebase, saveSubjectsToFirebase, loadSubjectsFromFirebase } from './firebase.config';
+import { loadSalesFromFirebase, addSaleToFirebase, updateSaleInFirebase, deleteSaleFromFirebase, saveSubjectsToFirebase, loadSubjectsFromFirebase, saveSalesToFirebase } from './firebase.config';
+import { BrowserRouter as Router, Route, Routes, Link } from 'react-router';
+import Dashboard from './Dashboard';
 
 // --- Types ---
 interface SaleEntry {
@@ -37,22 +37,16 @@ const SalesTracker = () => {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterPayment, setFilterPayment] = useState<'All' | 'Paid' | 'Pending'>('All');
   const [filterDelivery, setFilterDelivery] = useState<'All' | 'Delivered' | 'Pending'>('All');
 
-  const [isSubjectModalOpen, setIsSubjectModalOpen] = useState(false);
-  const [newSubjectCode, setNewSubjectCode] = useState('');
-  const [newSubjectPrice, setNewSubjectPrice] = useState('');
-
   // Subject List with prices (now in state)
-  const [subjects, setSubjects] = useState<Record<string, { price1: number; price2: number }>>({});
+  const [subjects, setSubjects] = useState<Record<string, { price1: number; price2: number; page1: number; page2: number; actualPrice1: number; actualPrice2: number }>>({});
 
   // Form State
   // selectedSubjects holds objects so user can pick subjects under +1 and +2 simultaneously
   const [selectedSubjects, setSelectedSubjects] = useState<Array<{category: '+1' | '+2'; code: string}>>([]);
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced'>('idle');
   
   const [formData, setFormData] = useState<Partial<SaleEntry>>({
     userName: '',
@@ -62,7 +56,11 @@ const SalesTracker = () => {
     deliveryStatus: 'Pending'
   });
 
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced'>('idle');
+
   // --- Firebase Integration ---
+  // Removed unused 'syncStatus' state.
+
   useEffect(() => {
     // Load data from Firebase on component mount
     const loadData = async () => {
@@ -72,28 +70,59 @@ const SalesTracker = () => {
           loadSubjectsFromFirebase()
         ]);
 
+        console.log('Fetched sales from Firebase:', firebaseSales);
+        console.log('Fetched subjects from Firebase:', firebaseSubjects);
+
+        let loadedSubjects: Record<string, { price1: number; price2: number; page1: number; page2: number; actualPrice1: number; actualPrice2: number }> = {};
+        if (firebaseSubjects) {
+          const normalizedSubjects: Record<string, { price1: number; price2: number; page1: number; page2: number; actualPrice1: number; actualPrice2: number }> = {};
+          Object.entries(firebaseSubjects).forEach(([key, val]: [string, any]) => {
+            normalizedSubjects[key] = {
+              price1: val.price1 !== undefined ? val.price1 : (val.price || 30),
+              price2: val.price2 !== undefined ? val.price2 : (val.price || 30),
+              page1: val.page1 || 0,
+              page2: val.page2 || 0,
+              actualPrice1: val.actualPrice1 || 0,
+              actualPrice2: val.actualPrice2 || 0
+            };
+          });
+          console.log('Normalized subjects:', normalizedSubjects);
+          loadedSubjects = normalizedSubjects;
+        }
+        setSubjects(loadedSubjects);
+
         if (firebaseSales && Array.isArray(firebaseSales)) {
-          setSales(firebaseSales);
+          // Recalculate amounts based on loaded subjects to ensure consistency
+          const recalculatedSales = firebaseSales.map((sale: SaleEntry) => {
+            if (sale.subjects && sale.subjects.length > 0) {
+              const calculatedAmount = sale.subjects.reduce((acc, s) => {
+                const parts = s.split(' ');
+                if (parts.length < 2) return acc;
+                const cat = parts[0] as '+1' | '+2';
+                const subCode = parts[1];
+                const subData = loadedSubjects[subCode];
+                if (!subData) return acc;
+                const price = (cat === '+1' ? subData.price1 : subData.price2) || 0;
+                return acc + price;
+              }, 0);
+
+              // If calculated amount is valid and different, use it
+              if (calculatedAmount > 0 && calculatedAmount !== sale.amount) {
+                return { ...sale, amount: calculatedAmount };
+              }
+            }
+            return sale;
+          });
+          
+          setSales(recalculatedSales);
+          console.log('Updated sales state with recalculation:', recalculatedSales);
         } else {
           // No data in Firebase yet — keep local state empty and don't auto-seed.
           setSales([]);
         }
 
-        if (firebaseSubjects) {
-          // Normalize data to ensure price1 and price2 exist
-          const normalizedSubjects: Record<string, { price1: number; price2: number }> = {};
-          Object.entries(firebaseSubjects).forEach(([key, val]: [string, any]) => {
-            normalizedSubjects[key] = {
-              price1: val.price1 !== undefined ? val.price1 : (val.price || 30),
-              price2: val.price2 !== undefined ? val.price2 : (val.price || 30)
-            };
-          });
-          setSubjects(normalizedSubjects);
-        }
-        setSyncStatus('synced');
       } catch (error) {
         console.error('Error loading from Firebase:', error);
-        setSyncStatus('idle');
       }
     };
     
@@ -204,69 +233,6 @@ const SalesTracker = () => {
     setSelectedSubjects([]);
   };
 
-  // Subject Management Handlers
-  const handleAddSubject = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (newSubjectCode && newSubjectPrice) {
-      const price = parseFloat(newSubjectPrice);
-      const updatedSubjects = {
-        ...subjects,
-        [newSubjectCode.toUpperCase()]: { price1: price, price2: price }
-      };
-      setSubjects(updatedSubjects);
-      setNewSubjectCode('');
-      setNewSubjectPrice('');
-      await saveSubjectsToFirebase(updatedSubjects);
-    }
-  };
-
-  const handleUpdateSubjectPrice = async (code: string, category: '+1' | '+2', newPrice: number) => {
-    const subject = subjects[code];
-    const updatedSubjects = {
-      ...subjects,
-      [code]: { 
-        ...subject,
-        [category === '+1' ? 'price1' : 'price2']: newPrice 
-      }
-    };
-    setSubjects(updatedSubjects);
-
-    // Update existing sales
-    const updatedSales = sales.map(sale => {
-      if (sale.subjects && sale.subjects.some(s => s.split(' ')[1] === code)) {
-        const newAmount = sale.subjects.reduce((acc, s) => {
-          const parts = s.split(' ');
-          const cat = parts[0] as '+1' | '+2';
-          const subCode = parts[1];
-          const subData = updatedSubjects[subCode];
-          const price = (cat === '+1' ? subData?.price1 : subData?.price2) || 0;
-          return acc + price;
-        }, 0);
-        return { ...sale, amount: newAmount };
-      }
-      return sale;
-    });
-
-    const changedSales = updatedSales.filter((s, i) => s.amount !== sales[i].amount);
-    const promises: Promise<any>[] = [saveSubjectsToFirebase(updatedSubjects)];
-
-    if (changedSales.length > 0) {
-      setSales(updatedSales);
-      changedSales.forEach(s => promises.push(updateSaleInFirebase(s.id, { amount: s.amount })));
-    }
-
-    await Promise.all(promises);
-  };
-
-  const handleDeleteSubject = async (code: string) => {
-    if (confirm(`Delete subject ${code}?`)) {
-      const newSubjects = { ...subjects };
-      delete newSubjects[code];
-      setSubjects(newSubjects);
-      await saveSubjectsToFirebase(newSubjects);
-    }
-  };
-
   // 2. Update Payment Status
   const handleUpdatePaymentStatus = async (id: number, newStatus: 'Paid' | 'Pending') => {
     setSales(sales.map((sale: SaleEntry) => {
@@ -352,42 +318,23 @@ const SalesTracker = () => {
     return matchesSearch && matchesPayment && matchesDelivery;
   });
 
-  // Stats
-  const totalRevenue = sales.reduce((acc: number, curr: SaleEntry) => acc + curr.amount, 0);
-  const pendingRevenue = sales.filter((s: SaleEntry) => s.paymentStatus === 'Pending').reduce((acc, curr) => acc + curr.amount, 0);
-  const pendingDeliveries = sales.filter((s: SaleEntry) => s.deliveryStatus === 'Pending').length;
-  const deliveredCount = sales.filter((s: SaleEntry) => s.deliveryStatus === 'Delivered').length;
-  const pendingPayments = sales.filter((s: SaleEntry) => s.paymentStatus === 'Pending').length;
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 p-4 md:p-6 font-sans text-gray-800">
       
       {/* --- Header & Stats --- */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 md:mb-12 gap-6">
-        <div className="w-full md:w-auto">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="p-2 bg-blue-600 rounded-lg">
-              <TrendingUp size={28} className="text-white" />
-            </div>
-            <h1 className="text-3xl md:text-4xl font-bold text-gray-900">Sales Tracker</h1>
-          </div>
-          <p className="text-sm md:text-base text-gray-600 ml-0 md:ml-14">Manage student purchases, payments, and deliveries</p>
+        <div className="flex items-center justify-between w-full md:w-auto gap-3">
+          <h1 className="text-3xl font-bold text-gray-900">Sale Entry</h1>
+          <Link to="/dashboard">
+            <button 
+              className="p-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg shadow-sm transform hover:scale-105 transition-all"
+              title="Dashboard"
+            >
+              <LayoutDashboard size={20} />
+            </button>
+          </Link>
         </div>
         <div className="flex gap-3 flex-wrap w-full md:w-auto">
-          <button 
-            onClick={() => setIsDeleteModalOpen(true)}
-            className="p-3 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg shadow-lg transform hover:scale-105 transition-all"
-            title="Delete Entry"
-          >
-            <Trash size={22} />
-          </button>
-          <button 
-            onClick={() => setIsSubjectModalOpen(true)}
-            className="p-3 bg-purple-100 hover:bg-purple-200 text-purple-700 rounded-lg shadow-lg transform hover:scale-105 transition-all"
-            title="Manage Subjects"
-          >
-            <GitBranch size={22} />
-          </button>
           <button 
             onClick={() => setIsModalOpen(true)}
             className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-bold px-6 py-3 rounded-lg shadow-lg transform hover:scale-105 transition-all"
@@ -395,52 +342,6 @@ const SalesTracker = () => {
             <Plus size={22} />
             New Sale
           </button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all">
-          <div className="flex items-center gap-4">
-            <div className="p-3 bg-emerald-100 text-emerald-600 rounded-lg h-fit flex items-center justify-center text-2xl font-bold">
-              ₹
-            </div>
-            <div className="flex-1">
-              <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Revenue (Pending / Total)</p>
-              <p className="text-xl font-bold text-gray-900 mt-1">
-                <span className="text-emerald-600">₹{pendingRevenue}</span>
-                <span className="text-gray-400 mx-1">/</span>
-                <span className="text-blue-600">₹{totalRevenue}</span>
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all">
-          <div className="flex items-center gap-4">
-            <div className="p-3 bg-blue-100 text-blue-600 rounded-lg h-fit">
-              <Truck size={28} />
-            </div>
-            <div className="flex-1">
-              <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Delivery (Pending / Delivered)</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">
-                <span className="text-emerald-600">{pendingDeliveries}</span>
-                <span className="text-gray-400 mx-1">/</span>
-                <span className="text-blue-600">{deliveredCount}</span>
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all">
-          <div className="flex items-center gap-4">
-            <div className="p-3 bg-purple-100 text-purple-600 rounded-lg h-fit">
-              <FileText size={28} />
-            </div>
-            <div className="flex-1">
-              <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Total Entries</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{sales.length}</p>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -712,7 +613,10 @@ const SalesTracker = () => {
                               className="w-5 h-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                             />
                             <span className="text-sm font-bold text-gray-800">{subject}</span>
-                            <span className="text-xs text-gray-500 ml-auto">₹{subjects[subject].price1.toFixed(2)}</span>
+                            <span className="text-xs text-gray-500 ml-auto flex items-center gap-1">
+                              {subjects[subject].page1 > 0 && <span className="bg-gray-100 px-1 rounded text-gray-600">{subjects[subject].page1}p</span>}
+                              <span>₹{subjects[subject].price1.toFixed(2)}</span>
+                            </span>
                           </label>
                         );
                       })}
@@ -746,7 +650,10 @@ const SalesTracker = () => {
                               className="w-5 h-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                             />
                             <span className="text-sm font-bold text-gray-800">{subject}</span>
-                            <span className="text-xs text-gray-500 ml-auto">₹{subjects[subject].price2.toFixed(2)}</span>
+                            <span className="text-xs text-gray-500 ml-auto flex items-center gap-1">
+                              {subjects[subject].page2 > 0 && <span className="bg-gray-100 px-1 rounded text-gray-600">{subjects[subject].page2}p</span>}
+                              <span>₹{subjects[subject].price2.toFixed(2)}</span>
+                            </span>
                           </label>
                         );
                       })}
@@ -812,157 +719,23 @@ const SalesTracker = () => {
         </div>
       )}
 
-      {/* --- Delete Entries Modal --- */}
-      {isDeleteModalOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden border border-gray-200 max-h-[80vh] flex flex-col">
-            <div className="p-6 border-b border-gray-200 bg-gray-50 flex justify-between items-center shrink-0">
-              <div className="flex items-center gap-3">
-                <Trash size={24} className="text-red-600" />
-                <h3 className="font-bold text-xl text-gray-900">Delete Entries</h3>
-              </div>
-              <button onClick={() => setIsDeleteModalOpen(false)} className="text-gray-400 hover:text-gray-600 p-1 hover:bg-gray-200 rounded-lg">
-                <X size={20} />
-              </button>
-            </div>
-            
-            <div className="p-4 overflow-y-auto flex-1">
-              {sales.length === 0 ? (
-                <p className="text-center text-gray-500 py-4">No entries to delete.</p>
-              ) : (
-                <div className="space-y-2">
-                  {sales.map(sale => (
-                    <div key={sale.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
-                      <div>
-                        <p className="font-bold text-gray-800">{sale.userName}</p>
-                        <p className="text-xs text-gray-500">{sale.productName}</p>
-                      </div>
-                      <button 
-                        onClick={() => handleDeleteSale(sale.id)}
-                        className="text-red-500 hover:text-red-700 p-2 hover:bg-red-50 rounded-full transition-colors"
-                      >
-                        <Trash size={18} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="p-4 border-t border-gray-200 bg-gray-50 shrink-0">
-              <button 
-                onClick={() => setIsDeleteModalOpen(false)}
-                className="w-full bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2.5 rounded-lg transition-all"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- Subject Settings Modal --- */}
-      {isSubjectModalOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden border border-gray-200 max-h-[80vh] flex flex-col">
-            <div className="p-6 border-b border-gray-200 bg-gray-50 flex justify-between items-center shrink-0">
-              <div className="flex items-center gap-3">
-                <GitBranch size={24} className="text-purple-600" />
-                <h3 className="font-bold text-xl text-gray-900">Manage Subjects</h3>
-              </div>
-              <button onClick={() => setIsSubjectModalOpen(false)} className="text-gray-400 hover:text-gray-600 p-1 hover:bg-gray-200 rounded-lg">
-                <X size={20} />
-              </button>
-            </div>
-            
-            <div className="p-6 overflow-y-auto flex-1 space-y-6">
-              {/* Add New Subject */}
-              <form onSubmit={handleAddSubject} className="flex gap-2 items-end">
-                <div className="flex-1">
-                  <label className="block text-xs font-bold text-gray-600 mb-1">Code</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g. PHY"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm uppercase"
-                    value={newSubjectCode}
-                    onChange={e => setNewSubjectCode(e.target.value.toUpperCase())}
-                    required
-                  />
-                </div>
-                <div className="w-24">
-                  <label className="block text-xs font-bold text-gray-600 mb-1">Price (₹)</label>
-                  <input 
-                    type="number" 
-                    placeholder="30"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                    value={newSubjectPrice}
-                    onChange={e => setNewSubjectPrice(e.target.value)}
-                    required
-                  />
-                </div>
-                <button 
-                  type="submit"
-                  className="bg-purple-600 hover:bg-purple-700 text-white p-2 rounded-lg h-[38px] w-[38px] flex items-center justify-center"
-                >
-                  <Plus size={20} />
-                </button>
-              </form>
-
-              {/* List Existing */}
-              <div className="space-y-3">
-                <h4 className="font-bold text-gray-700 text-sm border-b pb-2">Existing Subjects</h4>
-                {Object.entries(subjects).map(([code, data]) => (
-                  <div key={code} className="flex items-center justify-between bg-gray-50 p-3 rounded-lg border border-gray-100">
-                    <span className="font-bold text-gray-800 w-16">{code}</span>
-                    <div className="flex items-center gap-4 flex-1 justify-end">
-                      
-                      <div className="flex items-center gap-1">
-                        <span className="text-xs font-bold text-gray-500">+1</span>
-                        <span className="text-gray-500 text-sm">₹</span>
-                        <input 
-                          type="number" 
-                          className="w-16 border border-gray-300 rounded px-2 py-1 text-sm text-right"
-                          value={data.price1}
-                          onChange={(e) => handleUpdateSubjectPrice(code, '+1', parseFloat(e.target.value))}
-                        />
-                      </div>
-
-                      <div className="flex items-center gap-1">
-                        <span className="text-xs font-bold text-gray-500">+2</span>
-                        <span className="text-gray-500 text-sm">₹</span>
-                        <input 
-                          type="number" 
-                          className="w-16 border border-gray-300 rounded px-2 py-1 text-sm text-right"
-                          value={data.price2}
-                          onChange={(e) => handleUpdateSubjectPrice(code, '+2', parseFloat(e.target.value))}
-                        />
-                      </div>
-                      <button 
-                        onClick={() => handleDeleteSubject(code)}
-                        className="text-red-400 hover:text-red-600 p-1 ml-2"
-                      >
-                        <X size={16} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="p-4 border-t border-gray-200 bg-gray-50 shrink-0">
-              <button 
-                onClick={() => setIsSubjectModalOpen(false)}
-                className="w-full bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2.5 rounded-lg transition-all"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
     </div>
   );
 };
 
-export default SalesTracker;
+export { SalesTracker };
+
+const App = () => {
+  return (
+    <Router>
+      <div>
+        <Routes>
+          <Route path="/" element={<SalesTracker />} />
+          <Route path="/dashboard" element={<Dashboard />} />
+        </Routes>
+      </div>
+    </Router>
+  );
+};
+
+export default App;

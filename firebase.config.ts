@@ -121,7 +121,7 @@ export const deleteSaleFromFirebase = async (id: number) => {
 // --- Subjects ---
 
 // Save subjects object to 'subjects' node
-export const saveSubjectsToFirebase = async (subjects: Record<string, { price: number }>) => {
+export const saveSubjectsToFirebase = async (subjects: Record<string, any>) => {
   try {
     const dbRef = ref(database, 'subjects');
     await set(dbRef, subjects);
