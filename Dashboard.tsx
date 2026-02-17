@@ -169,6 +169,21 @@ const Dashboard = () => {
     }
   };
 
+  const handleSetActualPricesAsPages = async () => {
+    if (!confirm('Set all actual prices to match page counts?')) return;
+    
+    const updatedSubjects = { ...subjects };
+    Object.keys(updatedSubjects).forEach(key => {
+      updatedSubjects[key] = {
+        ...updatedSubjects[key],
+        actualPrice1: updatedSubjects[key].page1 || 0,
+        actualPrice2: updatedSubjects[key].page2 || 0
+      };
+    });
+    setSubjects(updatedSubjects);
+    await saveSubjectsToFirebase(updatedSubjects);
+  };
+
   const totalRevenue = sales.reduce((acc, curr) => acc + curr.amount, 0);
   const pendingRevenue = sales.filter(s => s.paymentStatus === 'Pending').reduce((acc, curr) => acc + curr.amount, 0);
   const pendingDeliveries = sales.filter(s => s.deliveryStatus === 'Pending').length;
@@ -222,6 +237,25 @@ const Dashboard = () => {
   });
 
   const totalProfit = studentStats.reduce((acc, curr) => acc + curr.profit, 0);
+
+  const totalAllPages = sales.reduce((acc, sale) => {
+    let salePages = 0;
+    if (sale.subjects) {
+      sale.subjects.forEach(s => {
+        const parts = s.split(' ');
+        if (parts.length >= 2) {
+          const category = parts[0];
+          const code = parts[1];
+          const subjectData = subjects[code];
+          if (subjectData) {
+             if (category === '+1') salePages += (subjectData.page1 || 0);
+             if (category === '+2') salePages += (subjectData.page2 || 0);
+          }
+        }
+      });
+    }
+    return acc + salePages;
+  }, 0);
 
   if (!isAuthenticated) {
     return (
@@ -559,6 +593,12 @@ const Dashboard = () => {
               </button>
             </div>
             <div className="p-6 overflow-y-auto flex-1 space-y-3">
+              <button 
+                onClick={handleSetActualPricesAsPages}
+                className="w-full bg-blue-100 hover:bg-blue-200 text-blue-700 font-bold py-2 rounded-lg mb-2 transition-colors text-sm"
+              >
+                Set as Pages
+              </button>
               {Object.entries(subjects).map(([code, data]) => (
                 <div key={code} className="flex items-center justify-between bg-gray-50 p-3 rounded-lg border border-gray-100">
                   <span className="font-bold text-gray-800 w-16">{code}</span>
@@ -628,7 +668,10 @@ const Dashboard = () => {
             <div className="p-6 border-b border-gray-200 bg-gray-50 flex justify-between items-center shrink-0">
               <div className="flex items-center gap-3">
                 <FileText size={24} className="text-indigo-600" />
-                <h3 className="font-bold text-xl text-gray-900">Student Pages</h3>
+                <div>
+                  <h3 className="font-bold text-xl text-gray-900">Student Pages</h3>
+                  <p className="text-sm text-gray-500 font-medium">Total Pages: {totalAllPages}</p>
+                </div>
               </div>
               <button onClick={() => setIsStudentPagesModalOpen(false)} className="text-gray-400 hover:text-gray-600 p-1 hover:bg-gray-200 rounded-lg">
                 <X size={20} />
