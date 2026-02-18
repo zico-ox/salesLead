@@ -186,6 +186,7 @@ const Dashboard = () => {
 
   const totalRevenue = sales.reduce((acc, curr) => acc + curr.amount, 0);
   const pendingRevenue = sales.filter(s => s.paymentStatus === 'Pending').reduce((acc, curr) => acc + curr.amount, 0);
+  const paidRevenue = totalRevenue - pendingRevenue;
   const pendingDeliveries = sales.filter(s => s.deliveryStatus === 'Pending').length;
   const deliveredCount = sales.filter(s => s.deliveryStatus === 'Delivered').length;
 
@@ -323,9 +324,11 @@ const Dashboard = () => {
                   ₹
                 </div>
                 <div className="flex-1">
-                  <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Revenue (Pending / Total)</p>
+                  <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Revenue (Paid / Pending / Total)</p>
                   <p className="text-xl font-bold text-gray-900 mt-1">
-                    <span className="text-emerald-600">₹{pendingRevenue}</span>
+                    <span className="text-emerald-600">₹{paidRevenue}</span>
+                    <span className="text-gray-400 mx-1">/</span>
+                    <span className="text-orange-600">₹{pendingRevenue}</span>
                     <span className="text-gray-400 mx-1">/</span>
                     <span className="text-blue-600">₹{totalRevenue}</span>
                   </p>
@@ -339,11 +342,13 @@ const Dashboard = () => {
                   <Truck size={28} />
                 </div>
                 <div className="flex-1">
-                  <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Delivery (Pending / Delivered)</p>
+                  <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Delivery (Delivered / Pending / Total)</p>
                   <p className="text-2xl font-bold text-gray-900 mt-1">
-                    <span className="text-emerald-600">{pendingDeliveries}</span>
+                    <span className="text-emerald-600">{deliveredCount}</span>
                     <span className="text-gray-400 mx-1">/</span>
-                    <span className="text-blue-600">{deliveredCount}</span>
+                    <span className="text-orange-600">{pendingDeliveries}</span>
+                    <span className="text-gray-400 mx-1">/</span>
+                    <span className="text-blue-600">{sales.length}</span>
                   </p>
                 </div>
               </div>
